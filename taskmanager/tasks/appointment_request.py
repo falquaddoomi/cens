@@ -53,15 +53,13 @@ class AppointmentRequest(BaseTask):
         r_stop = sms.Response('stop', match_regex=r'cancel|no|stop', label='stop', callback=self.appointment_stopped_alert)
         r_stalling = sms.Response('ok', match_regex=r'ok', label='stalling')
         r_date_past = sms.Response('yesterday at 3pm', match_callback=AppointmentRequest.match_past_date, label='datepast')
-        r_valid_appt = sms.Response('today at 3pm', match_callback=AppointmentRequest.match_date_and_time, label='datetime', callback=self.schedule_reminders)
-        
-        # lists of responses that'll be used for every node that takes the same input as the initial
-        initial_responses = [r_stop, r_stalling, r_date_past, r_valid_appt]
+        r_valid_appt = sms.Response('today at 3pm', match_callback=AppointmentRequest.match_date_and_time, callback=self.checking_valid_appt, label='datetime')
+        r_appt_confirmed = sms.Response('ok', match_regex=r'ok', label='confirmed', callback=self.schedule_reminders)
 
         # message sent asking the user to schedule an appt. and to text us back the date and time
         m_initial = sms.Message(
             render_to_string('tasks/appts/request.html', {'patient': self.patient, 'args': self.args}),
-            initial_responses,
+            [r_stop, r_stalling, r_date_past, r_valid_appt],
             label='remind', retries=AppointmentRequest.RETRY_COUNT, timeout=AppointmentRequest.RETRY_TIMEOUT,
             no_match_callback=self.unparseable_response)
 
@@ -80,14 +78,14 @@ class AppointmentRequest(BaseTask):
         # this replicates the expected responses of the initial node because it basically is the initial node
         m_stalling = sms.Message(
             'Please respond with both the date and the time of the appointment when you\'ve scheduled it, or \'stop\' if you don\'t want to schedule one now.',
-            initial_responses,
+            [r_stop, r_stalling, r_date_past, r_valid_appt],
             label='remind', retries=AppointmentRequest.RETRY_COUNT, timeout=AppointmentRequest.RETRY_TIMEOUT)
 
         # message sent when the user enters a date that's already past; we tell them what they entered and reprompt them
         # this replicates the expected responses of the initial node because it basically is the initial node
         m_date_past = sms.Message(
             "returned by custom msg callback",
-            initial_responses,
+            [r_stop, r_stalling, r_date_past, r_valid_appt],
             label='remind', custom_message_callback=self.date_past_callback,
             retries=AppointmentRequest.RETRY_COUNT, timeout=AppointmentRequest.RETRY_TIMEOUT)
         
@@ -95,22 +93,26 @@ class AppointmentRequest(BaseTask):
         # m1 = sms.Message(q1, [r1,r2], label='m1', no_match_callback=self.no_match_test)
         
         # message sent when the user sends us a valid date and time
-        # the response that leads here actually sets up the appointments
+        # we wait for confirmation, and if it comes we set up the appointment
         m_valid_appt = sms.Message(
-            "returned by custom msg callback", [],
+            "returned by custom msg callback",
+            [r_stop, r_appt_confirmed, r_date_past, r_valid_appt],
             label='remind', custom_message_callback=self.valid_appt_msg_callback)
-
-        # lists of transitions that'll be used for every node that takes the same input as the initial
-        # this needs to match up pairwise with initial_responses :\
-        initial_transitions = [m_stop, m_stalling, m_date_past, m_valid_appt]
-
+        
+        # message sent when the user confirms their valid appointment
+        # the response that leads here actually sets up the appointment
+        m_appt_confirmed = sms.Message(
+            render_to_string('tasks/appts/response_confirmed.html', {'patient': self.patient, 'args': self.args}), [],
+            label='remind')
+        
         # define a super class with .restore() in it. below, user will call createGraph(), createInteraction()
         # which remember handles to graph and interaction. when .restore() is called it just updates the node we're at searching with the label.
-        self.graph = { m_initial: initial_transitions,
+        self.graph = { m_initial: [m_stop, m_stalling, m_date_past, m_valid_appt],
                        m_stop: [],
-                       m_stalling: initial_transitions,
-                       m_date_past: initial_transitions,
-                       m_valid_appt: []
+                       m_stalling: [m_stop, m_stalling, m_date_past, m_valid_appt],
+                       m_date_past: [m_stop, m_stalling, m_date_past, m_valid_appt],
+                       m_valid_appt: [m_stop, m_appt_confirmed, m_date_past, m_valid_appt],
+                       m_appt_confirmed: []
                        }
 
         super(AppointmentRequest, self).setinteraction(graph=self.graph, initialnode=m_initial, label='interaction')
@@ -141,8 +143,6 @@ class AppointmentRequest(BaseTask):
         (res, retval) = pdt.parse(received_msg)
         t = datetime(*res[0:7])
         appttime = t.strftime("%m/%d/%Y %I:%M%p")
-
-        print "*** CALLBACK GOT THE FOLLOWING TEXT: " + str(received_msg) + ", parsed as: " + str(appttime)
 
         # return them a message that includes the time they selected in the message body (finally! :D)
         return render_to_string('tasks/appts/response.html', {'args': self.args, 'appttime': appttime})
@@ -280,8 +280,21 @@ class AppointmentRequest(BaseTask):
         
         return "Please respond with both the date and the time of the appointment you scheduled (e.g. 1/15/2011 8:30pm) or 'no' to cancel."
 
-    def schedule_reminders(self, *args, **kwargs):
+    def checking_valid_appt(self, *args, **kwargs):
         ndatetime = kwargs['response']
+        session_id = kwargs['session_id']
+
+        # store the pending datetime here until it's been confirmed by an "appt ok" response
+        self.args['pending_datetime'] = ndatetime
+
+    def schedule_reminders(self, *args, **kwargs):
+        # ndatetime = kwargs['response']
+
+        # FAISAL: we grab ndatetime from the args, which was populated in the check_valid_appt callback
+        ndatetime = self.args['pending_datetime']
+        # also clear pending_datetime from the args collection so that we don't give it to our child events
+        del self.args['pending_datetime']
+
         session_id = kwargs['session_id']
         
         print 'in %s: user responsed with date: %s' % (self.__class__, kwargs['response'])
