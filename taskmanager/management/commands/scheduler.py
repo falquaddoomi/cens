@@ -4,7 +4,7 @@ from twisted.web.client import Agent
 from twisted.web.http_headers import Headers
 from stringprod import StringProducer
 
-import sys, json
+import sys, json, urllib
 from datetime import datetime
 
 from django.core.management.base import BaseCommand, CommandError
@@ -207,7 +207,8 @@ def check_schedule():
         if sched_task.process:
             payload_dict['process'] = sched_task.process.id
 
-        payload = "&".join(map(lambda x: "%s=%s" % (x, payload_dict[x]), payload_dict))
+        # FAISAL: urllib.urlencode() takes care of &-delimiting and escaping our fields, thankfully
+        payload = urllib.urlencode(payload_dict)
 
         d = agent.request(
             'POST',
@@ -240,7 +241,7 @@ def check_timeouts():
             'session': session.id
             }
 
-        payload = "&".join(map(lambda x: "%s=%s" % (x, payload_dict[x]), payload_dict))
+        payload = urllib.urlencode(payload_dict)
 
         d = agent.request(
             'POST',
