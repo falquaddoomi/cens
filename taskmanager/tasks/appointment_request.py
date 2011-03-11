@@ -50,7 +50,7 @@ class AppointmentRequest(BaseTask):
         # first we set up all the expected responses
         # idealy this'd be directly before each message, but most of these responses are repeated in this case
         # r_cancel = sms.Response('cancel', match_regex=r'cancel|no', label='cancel', callback=self.appointment_cancelled_alert)
-        r_stop = sms.Response('stop', match_regex=r'cancel|no|stop', label='stop', callback=self.appointment_stopped_alert)
+        r_stop = sms.Response('stop', match_regex=r'cancel|n|no|stop', label='stop', callback=self.appointment_stopped_alert)
         r_stalling = sms.Response('ok', match_regex=r'ok', label='stalling')
         r_date_past = sms.Response('yesterday at 3pm', match_callback=AppointmentRequest.match_past_date, label='datepast')
         r_valid_appt = sms.Response('today at 3pm', match_callback=AppointmentRequest.match_date_and_time, callback=self.checking_valid_appt, label='datetime')
@@ -219,7 +219,7 @@ class AppointmentRequest(BaseTask):
     def match_non_date_and_time(msgtxt):
         pdt = parsedatetime.Calendar()
         (res, retcode) = pdt.parse(msgtxt)
-        if retcode == 3:
+        if retcode == 3 or retcode == 2:
             return False
         else:
             return res
@@ -228,7 +228,7 @@ class AppointmentRequest(BaseTask):
     def match_past_date(msgtxt):
         pdt = parsedatetime.Calendar()
         (res, retcode) = pdt.parse(msgtxt)
-        if retcode != 3:
+        if retcode != 3 and retcode != 2:
             return False
         else:
             # convert to date and return true if it's in the past
@@ -239,7 +239,7 @@ class AppointmentRequest(BaseTask):
     def match_date_and_time(msgtxt):
         pdt = parsedatetime.Calendar()
         (res, retcode) = pdt.parse(msgtxt)
-        if retcode != 3:
+        if retcode != 3 and retcode != 2:
             return False
         else:
             return res
